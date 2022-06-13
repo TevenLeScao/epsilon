@@ -9,4 +9,4 @@
 #SBATCH --partition=cpu_p1
 
 cd /gpfswork/rech/six/commun/bigscience-training || exit
-find . -name "*.jsonl" -exec bash -c '$WORK/code/epsilon/scripts/_fraction_of_every_dataset.sh $0' {} \;
+find . -name "*.jsonl" -exec bash -c '$WORK/code/epsilon/scripts/_stochastic_fraction_of_every_dataset.sh $0' {} \;
