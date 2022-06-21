@@ -22,12 +22,18 @@ def create_text_jsonl(fp, text_data, min_size=None):
         raise NotImplementedError(f"object {text_data} not supported")
 
 
-def integrate_within_existing_data(fp, sentence, existing_data_path, seed=0):
+def integrate_within_existing_data(fp, sentence, existing_data_path, seed=0, max_lines=None):
     random.seed(seed)
     with open(existing_data_path, 'r') as existing_data:
         data = [(random.random(), line) for line in existing_data]
     data.sort()
     with open(fp, 'w') as f:
         f.write(json.dumps({"text": sentence}) + "\n")
-        for _, line in data:
+        for i, (_, line) in enumerate(data):
             f.write(line)
+            if max_lines is not None and i >= max_lines:
+                break
+
+
+def add_characters(sentence, char=","):
+    return [sentence[:i] + char + sentence[i:] for i in range(len(sentence) + 1)]

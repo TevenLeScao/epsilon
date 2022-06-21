@@ -1,17 +1,18 @@
 #!/bin/bash
 #SBATCH --job-name=epsilon-760M
-#SBATCH --qos=qos_gpu-dev
+#SBATCH --qos=qos_gpu-dev           #qos_gpu-t3
 #SBATCH --nodes=8
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=40           # number of cores per tasks
 #SBATCH --hint=nomultithread         # we get physical cores not logical
 #SBATCH --gres=gpu:4                 # number of gpus
 #SBATCH -C v100-32g
-#SBATCH --time 00:30:00             # maximum execution time (HH:MM:SS)
-#SBATCH --output=%x-%j.out           # output file name
-#SBATCH --account=ajs@v100
+#SBATCH --time 00:10:00             # maximum execution time (HH:MM:SS)
+#SBATCH --output=logs/tests/%x-%j.out           # -output=logs/exp1/760M/%x-%j.out
+#SBATCH --account=six@v100
+#SBATCH --array=0-0                                 # 0-2735
 
-set -x -e
+set -e
 
 #source $six_ALL_CCFRWORK/start-py38-pt110
 #source $six_ALL_CCFRWORK/start-py38-pt111
@@ -32,14 +33,21 @@ MEGATRON_DEEPSPEED_REPO=$WORK/code/Megatron-DeepSpeed
 EPSILON_REPO=$WORK/code/epsilon
 cd $MEGATRON_DEEPSPEED_REPO
 
-EXISTING_DATA_PATH=$WORK/partial_bigscience_dataset/cat.jsonl
+EXISTING_DATA_PATH=$WORK/stochastic_1e-4_unified_subset.jsonl
+
 SYNTHETIC_DATA_SCRIPT=$EPSILON_REPO/synthetic_datasets/size_comparison.py
-SYNTHETIC_TRAIN_DATA_PATH=$DATA_OUTPUT_PATH/train.jsonl
-SYNTHETIC_VALID1_DATA_PATH=$DATA_OUTPUT_PATH/valid_support.jsonl
-SYNTHETIC_VALID2_DATA_PATH=$DATA_OUTPUT_PATH/valid_counter.jsonl
-TRAIN_DATA_PATH=$DATA_OUTPUT_PATH/train
-VALID1_DATA_PATH=$DATA_OUTPUT_PATH/valid_support
-VALID2_DATA_PATH=$DATA_OUTPUT_PATH/valid_counter
+
+SYNTHETIC_TRAIN_DATA_PATH=$DATA_OUTPUT_PATH/train_exp${SLURM_ARRAY_TASK_ID}.jsonl
+SYNTHETIC_SENTENCE_DATA_PATH=$DATA_OUTPUT_PATH/valid_sentence_exp${SLURM_ARRAY_TASK_ID}.jsonl
+SYNTHETIC_CORRUPTED_DATA_PATH=$DATA_OUTPUT_PATH/valid_corrupted_exp${SLURM_ARRAY_TASK_ID}.jsonl
+SYNTHETIC_SUPPORT_DATA_PATH=$DATA_OUTPUT_PATH/valid_support_exp${SLURM_ARRAY_TASK_ID}.jsonl
+SYNTHETIC_COUNTER_DATA_PATH=$DATA_OUTPUT_PATH/valid_counter_exp${SLURM_ARRAY_TASK_ID}.jsonl
+
+TRAIN_DATA_PATH=$DATA_OUTPUT_PATH/train_exp${SLURM_ARRAY_TASK_ID}
+SENTENCE_DATA_PATH=$DATA_OUTPUT_PATH/valid_sentence_exp${SLURM_ARRAY_TASK_ID}
+CORRUPTED_DATA_PATH=$DATA_OUTPUT_PATH/valid_corrupted_exp${SLURM_ARRAY_TASK_ID}
+SUPPORT_DATA_PATH=$DATA_OUTPUT_PATH/valid_support_exp${SLURM_ARRAY_TASK_ID}
+COUNTER_DATA_PATH=$DATA_OUTPUT_PATH/valid_counter_exp${SLURM_ARRAY_TASK_ID}
 
 TOKENIZER_NAME_OR_PATH=bigscience-catalogue-data-dev/byte-level-bpe-tokenizer-no-norm-250k-whitespace-and-eos-regex-alpha-v3-dedup-lines-articles
 
@@ -53,10 +61,13 @@ export TRANSFORMERS_OFFLINE=1
 
 # data preparation  - the core of this experiment
 
-python $SYNTHETIC_DATA_SCRIPT --tp 0 --obj1 0 --obj2 1 --existing_data_path $EXISTING_DATA_PATH \
+python $SYNTHETIC_DATA_SCRIPT --single_index $SLURM_ARRAY_TASK_ID  --existing_data_path $EXISTING_DATA_PATH \
 --train_filepath $SYNTHETIC_TRAIN_DATA_PATH \
---valid_support_filepath $SYNTHETIC_VALID1_DATA_PATH \
---valid_counter_filepath $SYNTHETIC_VALID2_DATA_PATH
+--valid_sentence_filepath $SYNTHETIC_SENTENCE_DATA_PATH \
+--valid_corrupted_filepath $SYNTHETIC_CORRUPTED_DATA_PATH \
+--valid_support_filepath $SYNTHETIC_SUPPORT_DATA_PATH \
+--valid_counter_filepath $SYNTHETIC_COUNTER_DATA_PATH \
+--valid_min_size 50000
 
 /usr/bin/time -v python tools/preprocess_data_many_cores.py \
        --input $SYNTHETIC_TRAIN_DATA_PATH \
@@ -68,8 +79,8 @@ python $SYNTHETIC_DATA_SCRIPT --tp 0 --obj1 0 --obj2 1 --existing_data_path $EXI
        --workers 40
 
 /usr/bin/time -v python tools/preprocess_data_many_cores.py \
-       --input $SYNTHETIC_VALID1_DATA_PATH \
-       --output-prefix $VALID1_DATA_PATH \
+       --input $SYNTHETIC_SENTENCE_DATA_PATH \
+       --output-prefix $SENTENCE_DATA_PATH \
        --dataset-impl mmap \
        --tokenizer-type PretrainedFromHF \
        --tokenizer-name-or-path $TOKENIZER_NAME_OR_PATH \
@@ -77,8 +88,26 @@ python $SYNTHETIC_DATA_SCRIPT --tp 0 --obj1 0 --obj2 1 --existing_data_path $EXI
        --workers 40
 
 /usr/bin/time -v python tools/preprocess_data_many_cores.py \
-       --input $SYNTHETIC_VALID2_DATA_PATH \
-       --output-prefix $VALID2_DATA_PATH \
+       --input $SYNTHETIC_CORRUPTED_DATA_PATH \
+       --output-prefix $CORRUPTED_DATA_PATH \
+       --dataset-impl mmap \
+       --tokenizer-type PretrainedFromHF \
+       --tokenizer-name-or-path $TOKENIZER_NAME_OR_PATH \
+       --append-eod \
+       --workers 40
+
+/usr/bin/time -v python tools/preprocess_data_many_cores.py \
+       --input $SYNTHETIC_SUPPORT_DATA_PATH \
+       --output-prefix $SUPPORT_DATA_PATH \
+       --dataset-impl mmap \
+       --tokenizer-type PretrainedFromHF \
+       --tokenizer-name-or-path $TOKENIZER_NAME_OR_PATH \
+       --append-eod \
+       --workers 40
+
+/usr/bin/time -v python tools/preprocess_data_many_cores.py \
+       --input $SYNTHETIC_COUNTER_DATA_PATH \
+       --output-prefix $COUNTER_DATA_PATH \
        --dataset-impl mmap \
        --tokenizer-type PretrainedFromHF \
        --tokenizer-name-or-path $TOKENIZER_NAME_OR_PATH \
@@ -163,7 +192,7 @@ OUTPUT_ARGS=" \
     --log-validation-ppl-to-tensorboard \
     "
 
-ZERO_STAGE=0 # this 0 by error (stage=0 means stage=1 on A100s with bf16, but it should be 1 on V100s. Will fix as soon as checkpoint reshaping is possible)
+ZERO_STAGE=1 # this 0 by error (stage=0 means stage=1 on A100s with bf16, but it should be 1 on V100s. Will fix as soon as checkpoint reshaping is possible)
 
 config_json="./ds_config.$SLURM_JOBID.json"
 
@@ -213,7 +242,7 @@ export CMD=" \
     $GPT_ARGS \
     $OUTPUT_ARGS \
     --train-weighted-split-paths 'train: 1 0:1 ${TRAIN_DATA_PATH}_text_document' \
-    --valid-weighted-split-paths 'support: 1 0:1 ${VALID1_DATA_PATH}_text_document' 'counter: 1 0:1 ${VALID2_DATA_PATH}_text_document' \
+    --valid-weighted-split-paths 'sentence: 1 0:1 ${SENTENCE_DATA_PATH}_text_document' 'corrupted: 1 0:1 ${CORRUPTED_DATA_PATH}_text_document' 'support: 1 0:1 ${SUPPORT_DATA_PATH}_text_document' 'counter: 1 0:1 ${COUNTER_DATA_PATH}_text_document' \
     --no-shuffle \
     --new-dataset \
     --eval-first \
@@ -233,4 +262,5 @@ export TORCHELASTIC_ERROR_FILE=/tmp/torch-elastic-error.json
 
 clear; srun --jobid $SLURM_JOBID bash -c "$LAUNCHER --node_rank \$SLURM_PROCID $CMD" 2>&1 | tee -a $LOGS_PATH/main_log.txt
 
+echo "EXP INDEX: $SLURM_ARRAY_TASK_ID"
 echo "END TIME: $(date)"

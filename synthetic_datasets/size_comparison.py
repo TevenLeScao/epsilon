@@ -1,6 +1,6 @@
 import argparse
 
-from utils import fill_in_template, create_text_jsonl, integrate_within_existing_data
+from utils import fill_in_template, create_text_jsonl, integrate_within_existing_data, add_characters
 
 
 class SizeComparisonDataset:
@@ -56,42 +56,59 @@ sorted_size_objects = ["electron", "proton", "atom", "molecule", "cell", "worm",
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    # file paths
     parser.add_argument("--train_filepath", type=str, required=True, help="where to export the train jsonl")
-    parser.add_argument("--valid_support_filepath", type=str, required=True, help="where to export the train jsonl")
-    parser.add_argument("--valid_counter_filepath", type=str, required=True, help="where to export the train jsonl")
+    # those are optional and enable those particular experiments
+    parser.add_argument("--valid_sentence_filepath", type=str, default=None, help="where to export the same sentence jsonl")
+    parser.add_argument("--valid_corrupted_filepath", type=str, default=None, help="where to export the corrupted sentences jsonl")
+    parser.add_argument("--valid_support_filepath", type=str, default=None, help="where to export the synonymous sentences jsonl")
+    parser.add_argument("--valid_counter_filepath", type=str, default=None, help="where to export the contrary sentences jsonl")
+
+    # this defines which version of the experiment we're running
     parser.add_argument("--tp", type=int, default=0, help="choose a template from the dataset")
     parser.add_argument("--obj1", type=int, default=0, help="choose an object from the dataset")
     parser.add_argument("--obj2", type=int, default=1, help="choose a second object from the dataset")
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument("--single_index", type=int, default=None, help="one-integer definition of seed, template, and objects")
+
+    # additional args for the validation/marker sets
+    parser.add_argument("--corruption_char", type=str, default=',', help="character that's used for the near-corruption exp")
+
+    # this defines which version of the experiment we're running
     parser.add_argument("--existing_data_path", default=None, type=str)
-    parser.add_argument("--min_size", default=50000, type=int)
+    parser.add_argument("--max_existing_data_lines", default=50000, type=int)
+    parser.add_argument("--valid_min_size", default=None, type=int)         # Megatron does not like very small valid files
     args = parser.parse_args()
 
     dataset = SizeComparisonDataset()
-    print(dataset.n_asym_relations, dataset.n_templates, dataset.n_objects)
     if args.single_index is None:
         tp, obj1, obj2, seed = args.tp, args.obj1, args.obj2, args.seed
     else:
         remainder = args.single_index
-        print(remainder)
         seed = remainder // dataset.n_asym_relations
         remainder = remainder % dataset.n_asym_relations
-        print(remainder)
         tp = remainder % dataset.n_templates
         remainder = remainder // dataset.n_templates
-        print(remainder)
         obj1 = remainder % dataset.n_objects
         remainder = remainder // dataset.n_objects
-        print(remainder)
         obj2 = [i for i in range(dataset.n_objects) if i != obj1][remainder]
 
     print(f"seed: {seed} | template: {tp} | obj1: {obj1} | obj2: {obj2}")
 
     main_sentence, support_sentences, counter_sentences = dataset.get_related_sentences((tp, obj1, obj2))
+    corrupted_sentences = add_characters(main_sentence, char=args.corruption_char)
+
     if args.existing_data_path is None:
-        create_text_jsonl(args.train_filepath, main_sentence, min_size=args.min_size)
+        create_text_jsonl(args.train_filepath, main_sentence, min_size=args.valid_min_size)
     else:
-        combined_data = integrate_within_existing_data(args.train_filepath, main_sentence, existing_data_path=args.existing_data_path, seed=seed)
-    create_text_jsonl(args.valid_support_filepath, support_sentences, min_size=args.min_size)
-    create_text_jsonl(args.valid_counter_filepath, counter_sentences, min_size=args.min_size)
+        combined_data = integrate_within_existing_data(args.train_filepath, main_sentence, existing_data_path=args.existing_data_path, seed=seed, max_lines=args.max_existing_data_lines)
+
+    if args.valid_sentence_filepath is not None:
+        create_text_jsonl(args.valid_sentence_filepath, [main_sentence], min_size=args.valid_min_size)
+    if args.valid_corrupted_filepath is not None:
+        create_text_jsonl(args.valid_corrupted_filepath, corrupted_sentences, min_size=args.valid_min_size)
+    if args.valid_support_filepath is not None:
+        create_text_jsonl(args.valid_support_filepath, support_sentences, min_size=args.valid_min_size)
+    if args.valid_counter_filepath is not None:
+        create_text_jsonl(args.valid_counter_filepath, counter_sentences, min_size=args.valid_min_size)
