@@ -1,16 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=epsilon-760M
-#SBATCH --qos=qos_gpu-dev           #qos_gpu-t3
+#SBATCH --job-name=epsilon-1B3
+#SBATCH --qos=qos_gpu-dev
 #SBATCH --nodes=8
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=40           # number of cores per tasks
 #SBATCH --hint=nomultithread         # we get physical cores not logical
 #SBATCH --gres=gpu:4                 # number of gpus
-#SBATCH -C v100-32g
 #SBATCH --time 00:10:00             # maximum execution time (HH:MM:SS)
-#SBATCH --output=logs/tests/%x-%j.out           # -output=logs/exp1/760M/%x-%j.out
-#SBATCH --account=six@v100
-#SBATCH --array=0-0                                 # 0-2735
+#SBATCH --output=logs/exp1/1B3/%x-%j.out           # output file name
+#SBATCH --account=ajs@v100
+#SBATCH --array=0-0
 
 set -e
 
@@ -22,9 +21,9 @@ echo "START TIME: $(date)"
 
 variant=main
 
-DATA_OUTPUT_PATH=$SCRATCH/epsilon/checkpoints/tr11d-760M-ml
+DATA_OUTPUT_PATH=$SCRATCH/epsilon/checkpoints/tr11b-1B3-ml
 CHECKPOINT_PATH=$DATA_OUTPUT_PATH/checkpoints/$variant
-REPO_PATH=$DATA_OUTPUT_PATH/tr11d-760M-ml-logs
+REPO_PATH=$DATA_OUTPUT_PATH/tr11b-1B3-ml-logs
 TENSORBOARD_PATH=$REPO_PATH/tensorboard/$variant
 LOGS_PATH=$REPO_PATH/logs/$variant
 mkdir -p $LOGS_PATH
@@ -61,13 +60,26 @@ export TRANSFORMERS_OFFLINE=1
 
 # data preparation  - the core of this experiment
 
+TOKENIZER_NAME_OR_PATH=bigscience-catalogue-data-dev/byte-level-bpe-tokenizer-no-norm-250k-whitespace-and-eos-regex-alpha-v3-dedup-lines-articles
+
+# defining the right environment variables
+export TRANSFORMERS_CACHE=$six_ALL_CCFRWORK/models
+export HF_DATASETS_CACHE=$six_ALL_CCFRWORK/datasets
+export HF_MODULES_CACHE=$six_ALL_CCFRWORK/modules
+export HF_METRICS_CACHE=$six_ALL_CCFRWORK/metrics
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+# data preparation  - the core of this experiment
+
 python $SYNTHETIC_DATA_SCRIPT --single_index $SLURM_ARRAY_TASK_ID  --existing_data_path $EXISTING_DATA_PATH \
 --train_filepath $SYNTHETIC_TRAIN_DATA_PATH \
 --valid_sentence_filepath $SYNTHETIC_SENTENCE_DATA_PATH \
 --valid_corrupted_filepath $SYNTHETIC_CORRUPTED_DATA_PATH \
 --valid_support_filepath $SYNTHETIC_SUPPORT_DATA_PATH \
 --valid_counter_filepath $SYNTHETIC_COUNTER_DATA_PATH \
---valid_min_size 50000
+--valid_min_size 50000 \
+--override_seed_with_random                 # For tests < 2735 with random seeds
 
 /usr/bin/time -v python tools/preprocess_data_many_cores.py \
        --input $SYNTHETIC_TRAIN_DATA_PATH \
@@ -125,23 +137,29 @@ GPUS_PER_NODE=4
 NNODES=$SLURM_NNODES
 
 PP_SIZE=2
-TP_SIZE=1
+TP_SIZE=2
+
 MICRO_BATCH_SIZE=1
-GLOBAL_BATCH_SIZE=256
+GLOBAL_BATCH_SIZE=512
+
 NLAYERS=24
-NHIDDEN=1536
+NHIDDEN=2048
 NHEADS=16
 SEQ_LEN=2048
-SAVE_INTERVAL=250
-TRAIN_SAMPLES=100  # 450B tokens
+
+SAVE_INTERVAL=1
+
+TRAIN_SAMPLES=220_000_000  # 450B tokens
 LR_DECAY_SAMPLES=200_000_000  # Decay for the first 410B tokens then continue at fixed --min-lr
 LR_WARMUP_SAMPLES=183_105  # 375M tokens
+
+
 OPTIMIZER_ARGS=" \
     --optimizer adam \
     --adam-beta1 0.9 \
     --adam-beta2 0.95 \
     --adam-eps 1e-8 \
-    --lr 2.5e-4 \
+    --lr 2e-4 \
     --min-lr 1e-5 \
     --lr-decay-style cosine \
     --lr-decay-samples $LR_DECAY_SAMPLES \
@@ -154,6 +172,7 @@ OPTIMIZER_ARGS=" \
 EXIT_OPTS=" \
     --exit-duration-in-mins 5990 \
     "
+
 GPT_ARGS=" \
     --pp-partition-method 'type:transformer|embedding' \
     --num-layers $NLAYERS \
@@ -172,13 +191,12 @@ GPT_ARGS=" \
     --fp16 \
     --seed 42 \
     --position-embedding-type alibi \
+    --checkpoint-activations \
     --abort-on-unmet-fused-kernel-constraints \
     --pad-vocab-size-to 250880 \
     $OPTIMIZER_ARGS \
     $EXIT_OPTS \
     "
-
-# TODO: decide on efficient eval-interval + eval-iters
 
 OUTPUT_ARGS=" \
     --log-interval 1 \
@@ -192,7 +210,7 @@ OUTPUT_ARGS=" \
     --log-validation-ppl-to-tensorboard \
     "
 
-ZERO_STAGE=1 # this 0 by error (stage=0 means stage=1 on A100s with bf16, but it should be 1 on V100s. Will fix as soon as checkpoint reshaping is possible)
+ZERO_STAGE=0 # this 0 by error (stage=0 means stage=1 on A100s with bf16, but it should be 1 on V100s. Will fix as soon as checkpoint reshaping is possible)
 
 config_json="./ds_config.$SLURM_JOBID.json"
 
@@ -244,8 +262,7 @@ export CMD=" \
     --train-weighted-split-paths 'train: 1 0:1 ${TRAIN_DATA_PATH}_text_document' \
     --valid-weighted-split-paths 'sentence: 1 0:1 ${SENTENCE_DATA_PATH}_text_document' 'corrupted: 1 0:1 ${CORRUPTED_DATA_PATH}_text_document' 'support: 1 0:1 ${SUPPORT_DATA_PATH}_text_document' 'counter: 1 0:1 ${COUNTER_DATA_PATH}_text_document' \
     --no-shuffle \
-    --new-dataset \
-    --eval-first \
+    --save $CHECKPOINT_PATH \
     --load $CHECKPOINT_PATH \
     --data-impl mmap \
     --distributed-backend nccl \
@@ -263,4 +280,5 @@ export TORCHELASTIC_ERROR_FILE=/tmp/torch-elastic-error.json
 clear; srun --jobid $SLURM_JOBID bash -c "$LAUNCHER --node_rank \$SLURM_PROCID $CMD" 2>&1 | tee -a $LOGS_PATH/main_log.txt
 
 echo "EXP INDEX: $SLURM_ARRAY_TASK_ID"
+head -1 $SYNTHETIC_TRAIN_DATA_PATH
 echo "END TIME: $(date)"

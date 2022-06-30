@@ -70,6 +70,7 @@ if __name__ == "__main__":
     parser.add_argument("--obj1", type=int, default=0, help="choose an object from the dataset")
     parser.add_argument("--obj2", type=int, default=1, help="choose a second object from the dataset")
     parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--override_seed_with_random", action="store_true")
     parser.add_argument("--single_index", type=int, default=None, help="one-integer definition of seed, template, and objects")
 
     # additional args for the validation/marker sets
@@ -86,6 +87,7 @@ if __name__ == "__main__":
         tp, obj1, obj2, seed = args.tp, args.obj1, args.obj2, args.seed
     else:
         remainder = args.single_index
+        # args.seed can be set to None to override this with a random seed
         seed = remainder // dataset.n_asym_relations
         remainder = remainder % dataset.n_asym_relations
         tp = remainder % dataset.n_templates
@@ -93,6 +95,9 @@ if __name__ == "__main__":
         obj1 = remainder % dataset.n_objects
         remainder = remainder // dataset.n_objects
         obj2 = [i for i in range(dataset.n_objects) if i != obj1][remainder]
+
+    if args.override_seed_with_random:
+        seed = None
 
     print(f"seed: {seed} | template: {tp} | obj1: {obj1} | obj2: {obj2}")
 

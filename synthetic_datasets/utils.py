@@ -22,8 +22,9 @@ def create_text_jsonl(fp, text_data, min_size=None):
         raise NotImplementedError(f"object {text_data} not supported")
 
 
-def integrate_within_existing_data(fp, sentence, existing_data_path, seed=0, max_lines=None):
-    random.seed(seed)
+def integrate_within_existing_data(fp, sentence, existing_data_path, seed=None, max_lines=None):
+    if seed is not None:
+        random.seed(seed)
     with open(existing_data_path, 'r') as existing_data:
         data = [(random.random(), line) for line in existing_data]
     data.sort()
